@@ -1,0 +1,153 @@
+diff --git a/FuzzerDriver.cpp b/FuzzerDriver.cpp
+index 277bdbf..4a80f38 100644
+--- a/FuzzerDriver.cpp
++++ b/FuzzerDriver.cpp
+@@ -686,6 +686,12 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
+   Options.IgnoreOOMs = Flags.ignore_ooms;
+   Options.IgnoreCrashes = Flags.ignore_crashes;
+   Options.MaxTotalTimeSec = Flags.max_total_time;
++  Options.NewStallSec = Flags.new_stall;
++  Options.CovStallSec = Flags.cov_stall;
++  if (Options.NewStallSec < 0 || Options.CovStallSec < 0) {
++    Printf("ERROR: stall durations must be non-negative seconds\n");
++    return 1;
++  }
+   Options.DoCrossOver = Flags.cross_over;
+   Options.CrossOverUniformDist = Flags.cross_over_uniform_dist;
+   Options.MutateDepth = Flags.mutate_depth;
+diff --git a/FuzzerFlags.def b/FuzzerFlags.def
+index 1181534..01d39d2 100644
+--- a/FuzzerFlags.def
++++ b/FuzzerFlags.def
+@@ -56,6 +56,8 @@ FUZZER_FLAG_INT(timeout_exitcode, 70, "When libFuzzer reports a timeout "
+ FUZZER_FLAG_INT(max_total_time, 0, "If positive, indicates the maximal total "
+                                    "time in seconds to run the fuzzer.")
+ FUZZER_FLAG_INT(help, 0, "Print help.")
++FUZZER_FLAG_INT(new_stall, 0, "Stop after N seconds without a NEW corpus entry (0 disables).")
++FUZZER_FLAG_INT(cov_stall, 0, "Stop after N seconds without increased cov (0 disables).")
+ FUZZER_FLAG_INT(fork, 0, "Experimental mode where fuzzing happens "
+                 "in a subprocess")
+ FUZZER_FLAG_INT(fork_corpus_groups, 0, "For fork mode, enable the corpus-group "
+diff --git a/FuzzerInternal.h b/FuzzerInternal.h
+index a50a4e7..a18460c 100644
+--- a/FuzzerInternal.h
++++ b/FuzzerInternal.h
+@@ -50,6 +50,8 @@ public:
+                static_cast<size_t>(Options.MaxTotalTimeSec);
+   }
+ 
++  bool Stalled();
++
+   size_t execPerSec() {
+     size_t Seconds = secondsSinceProcessStartUp();
+     return Seconds ? TotalNumberOfRuns / Seconds : 0;
+@@ -125,6 +127,10 @@ private:
+   size_t NumberOfNewUnitsAdded = 0;
+ 
+   size_t LastCorpusUpdateRun = 0;
++  steady_clock::time_point LastNewTime, LastCovTime;
++  size_t StallCoverage = 0;
++  bool StallTimersStarted = false;
++  bool StallReported = false;
+ 
+   bool HasMoreMallocsThanFrees = false;
+   size_t NumberOfLeakDetectionAttempts = 0;
+diff --git a/FuzzerLoop.cpp b/FuzzerLoop.cpp
+index d5fd0cb..4f7b480 100644
+--- a/FuzzerLoop.cpp
++++ b/FuzzerLoop.cpp
+@@ -537,6 +537,10 @@ bool Fuzzer::RunOne(const uint8_t *Data, size_t Size, bool MayDeleteFile,
+   size_t NumNewFeatures = Corpus.NumFeatureUpdates() - NumUpdatesBefore;
+   if (NumNewFeatures || ForceAddToCorpus) {
+     TPC.UpdateObservedPCs();
++    if (Options.CovStallSec > 0 && TPC.GetTotalPCCoverage() > StallCoverage) {
++      StallCoverage = TPC.GetTotalPCCoverage();
++      LastCovTime = steady_clock::now();
++    }
+     auto NewII =
+         Corpus.AddToCorpus({Data, Data + Size}, NumNewFeatures, MayDeleteFile,
+                            TPC.ObservedFocusFunction(), ForceAddToCorpus,
+@@ -644,6 +648,9 @@ void Fuzzer::PrintStatusForNewUnit(const Unit &U, const char *Text) {
+ }
+ 
+ void Fuzzer::ReportNewCoverage(InputInfo *II, const Unit &U) {
++  // REDUCE only shrinks an existing entry; it is not a NEW event.
++  if (Options.NewStallSec > 0 && !II->Reduced)
++    LastNewTime = steady_clock::now();
+   II->NumSuccessfullMutations++;
+   MD.RecordSuccessfulMutationSequence();
+   PrintStatusForNewUnit(U, II->Reduced ? "REDUCE" : "NEW   ");
+@@ -721,6 +728,8 @@ void Fuzzer::MutateAndTestOne() {
+   assert(CurrentMaxMutationLen > 0);
+ 
+   for (int i = 0; i < Options.MutateDepth; i++) {
++    if (Stalled())
++      break;
+     if (TotalNumberOfRuns >= Options.MaxNumberOfRuns)
+       break;
+     if (ReturnRequested)
+@@ -850,6 +859,31 @@ void Fuzzer::ReadAndExecuteSeedCorpora(std::vector<SizedFile> &CorporaFiles) {
+   }
+ }
+ 
++bool Fuzzer::Stalled() {
++  if (StallReported)
++    return true;
++  if (!StallTimersStarted || (!Options.NewStallSec && !Options.CovStallSec))
++    return false;
++  const auto Now = steady_clock::now();
++  const bool NewExpired = Options.NewStallSec > 0 &&
++      Now - LastNewTime >= seconds(Options.NewStallSec);
++  const bool CovExpired = Options.CovStallSec > 0 &&
++      Now - LastCovTime >= seconds(Options.CovStallSec);
++  if (!NewExpired && !CovExpired)
++    return false;
++  if (NewExpired)
++    Printf("INFO: --new-stall=%d reached: no NEW for %lld seconds\n",
++           Options.NewStallSec,
++           static_cast<long long>(duration_cast<seconds>(Now - LastNewTime).count()));
++  if (CovExpired)
++    Printf("INFO: --cov-stall=%d reached: no cov increase for %lld seconds (cov: %zd)\n",
++           Options.CovStallSec,
++           static_cast<long long>(duration_cast<seconds>(Now - LastCovTime).count()),
++           StallCoverage);
++  StallReported = true;
++  return true;
++}
++
+ void Fuzzer::Loop(std::vector<SizedFile> &CorporaFiles) {
+   auto FocusFunctionOrAuto = Options.FocusFunction;
+   DFT.Init(Options.DataFlowTrace, &FocusFunctionOrAuto, CorporaFiles,
+@@ -859,6 +893,10 @@ void Fuzzer::Loop(std::vector<SizedFile> &CorporaFiles) {
+   if (ReturnRequested)
+     return;
+   DFT.Clear();  // No need for DFT any more.
++  // Loading/instrumentation and the initial corpus do not consume the stall budget.
++  LastNewTime = LastCovTime = steady_clock::now();
++  StallCoverage = TPC.GetTotalPCCoverage();
++  StallTimersStarted = true;
+   TPC.SetPrintNewPCs(Options.PrintNewCovPcs);
+   TPC.SetPrintNewFuncs(Options.PrintNewCovFuncs);
+   system_clock::time_point LastCorpusReload = system_clock::now();
+@@ -867,6 +905,8 @@ void Fuzzer::Loop(std::vector<SizedFile> &CorporaFiles) {
+       Min(MaxMutationLen, Max(size_t(4), Corpus.MaxInputSize()));
+ 
+   while (true) {
++    if (Stalled())
++      break;
+     auto Now = system_clock::now();
+     if (!Options.StopFile.empty() &&
+         !FileToVector(Options.StopFile, 1, false).empty())
+diff --git a/FuzzerOptions.h b/FuzzerOptions.h
+index 72e2561..956c77b 100644
+--- a/FuzzerOptions.h
++++ b/FuzzerOptions.h
+@@ -28,6 +28,8 @@ struct FuzzingOptions {
+   bool IgnoreOOMs = true;
+   bool IgnoreCrashes = false;
+   int MaxTotalTimeSec = 0;
++  int NewStallSec = 0;
++  int CovStallSec = 0;
+   int RssLimitMb = 0;
+   int MallocLimitMb = 0;
+   bool DoCrossOver = true;

@@ -7,3 +7,10 @@
 # platform-dependent. Ignore it for now.
 # https://github.com/bazelbuild/bazel/issues/20369
 MODULE.bazel.lock
+
+# Local build tools, verification artifacts and the deliverable.
+/tools/bazel*
+/tools/google-java-format.jar
+/build/
+/tkur_jazzer_standalone.jar
+/tkur_jazzer_standalone.jar.sha256

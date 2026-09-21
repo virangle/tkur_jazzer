@@ -108,7 +108,7 @@ java_binary(
 
 java_library(
     name = "jazzer_lib",
-    srcs = ["Jazzer.java"],
+    srcs = ["Jazzer.java", "StallOptions.java"],
     visibility = [
         "//deploy:__pkg__",
         "//src/test/java/com/code_intelligence/jazzer:__pkg__",

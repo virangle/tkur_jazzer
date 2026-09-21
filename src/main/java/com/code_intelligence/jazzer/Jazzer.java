@@ -80,10 +80,19 @@ public class Jazzer {
             .collect(toList()));
   }
 
-  private static void start(List<String> args) throws IOException, InterruptedException {
+  private static void start(List<String> originalArgs) throws IOException, InterruptedException {
     // Lock in the output PrintStreams so that Jazzer can still emit output even if the fuzz target
     // itself is "silenced" by redirecting System.out and/or System.err.
     Log.fixOutErr(System.out, System.err);
+
+    final List<String> args;
+    try {
+      args = StallOptions.normalize(originalArgs);
+    } catch (IllegalArgumentException e) {
+      Log.error(e.getMessage());
+      exit(1);
+      return;
+    }
 
     Opt.registerAndValidateCommandLineArgs(parseJazzerArgs(args));
     handleTerminatingCommands();
@@ -201,10 +210,15 @@ public class Jazzer {
   private static void handleTerminatingCommands() {
     if (Opt.help.get()) {
       Log.println(Opt.generateHelpText());
+      Log.println(
+          "--new-stall <N>  Stop after N seconds without NEW (0 disables).\n"
+              + "--cov-stall <N>  Stop after N seconds without increased cov (0 disables).\n"
+              + "Both timers start after seed initialization; either can stop the run.\n"
+              + "The --flag=N form is also accepted.");
       exit(0);
     }
     if (Opt.version.get()) {
-      Log.println("Jazzer v" + JAZZER_VERSION);
+      Log.println("tkur_jazzer v" + JAZZER_VERSION);
       exit(0);
     }
     if (Opt.listFuzzTests.isSet()) {

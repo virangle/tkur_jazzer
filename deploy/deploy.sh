@@ -50,7 +50,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 # leading external to get a path we can pass to rlocation.
 java_rlocationpath=$(echo "$JAVA_EXECPATH" | cut -d/ -f2-)
 java=$(rlocation "$java_rlocationpath")
-"$java" -jar "${JAZZER_JAR_PATH}" --version 2>&1 | grep '^Jazzer v' || \
+"$java" -jar "${JAZZER_JAR_PATH}" --version 2>&1 | grep '^tkur_jazzer v' || \
   fail "JAZZER_JAR_PATH is not a valid jazzer.jar"
 
 # Local release for manual upload to central.sonatype.com

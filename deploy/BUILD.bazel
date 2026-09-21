@@ -24,7 +24,7 @@ sh_binary(
 
 string_flag(
     name = "jazzer_version",
-    build_setting_default = "0.0.0-dev",
+    build_setting_default = "0.30.0",
     make_variable = "JAZZER_VERSION",
     visibility = ["//visibility:public"],
 )
